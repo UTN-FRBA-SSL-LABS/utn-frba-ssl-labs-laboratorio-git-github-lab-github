@@ -1,0 +1,218 @@
+name: GitHub Classroom Workflow
+
+on:
+  push:
+    branches: [ "**" ]
+
+permissions:
+  checks: write
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  autograding:
+    name: Autograding
+    runs-on: ubuntu-latest
+    if: github.actor != 'github-classroom[bot]'
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── C1. Compilación ────────────────────────────────────────────
+
+      - name: "C1. Proyecto compila"
+        id: c1
+        continue-on-error: true
+        run: make clean && make
+
+      # ── C2–C3. Implementación de multiplicar ───────────────────────
+
+      - name: "C2. multiplicar implementada"
+        id: c2
+        continue-on-error: true
+        run: "! grep -q 'TODO' operaciones.c"
+
+      - name: "C3. multiplicar devuelve resultado correcto"
+        id: c3
+        continue-on-error: true
+        run: make clean && make && ./calculadora | grep -q '3 \* 5    = 15'
+
+      # ── C4–C5. Historial de commits ────────────────────────────────
+
+      - name: "C4. Commit wip: experimento roto existe"
+        id: c4
+        continue-on-error: true
+        run: |
+          git log --all --format='%s' | grep -qF 'wip: experimento roto'
+
+      - name: "C5. Revert del experimento existe"
+        id: c5
+        continue-on-error: true
+        run: git log --all --format='%s' | grep -q '^Revert'
+
+      # ── C6–C7. Calidad del código ──────────────────────────────────
+
+      - name: "C6. Sin conflict markers en operaciones.c"
+        id: c6
+        continue-on-error: true
+        run: "! grep -qE '^(<<<<<<<|=======|>>>>>>>)' operaciones.c"
+
+      - name: "C7. esPar funciona correctamente"
+        id: c7
+        continue-on-error: true
+        run: make clean && make && ./calculadora | grep -q '4 es par = 1' && ./calculadora | grep -q '7 es par = 0'
+
+      # ── C8. Mensajes de commit ─────────────────────────────────────
+
+      - name: "C8. Ningun mensaje de commit vacio o muy corto"
+        id: c8
+        continue-on-error: true
+        run: "! git log --format='%s' | grep -qE '^.{0,4}$'"
+
+      # ── C9–C10. Branch feature/mi-funcion ─────────────────────────
+
+      - name: "C9. Branch feature/mi-funcion fue creada"
+        id: c9
+        continue-on-error: true
+        run: |
+          git fetch --all --quiet
+          git branch -a | grep -q 'feature/mi-funcion' || \
+          gh pr list --state all --json headRefName --jq '.[].headRefName' | grep -q 'feature/mi-funcion'
+
+      - name: "C10. PR de feature/mi-funcion a main mergeado"
+        id: c10
+        continue-on-error: true
+        run: |
+          gh pr list --state merged --base main --json headRefName \
+            --jq '.[].headRefName' | grep -q 'feature/mi-funcion'
+
+      # ── C11–C14. Branch sugerencia/* ──────────────────────────────
+
+      - name: "C11. Branch sugerencia/* fue creada"
+        id: c11
+        continue-on-error: true
+        run: |
+          git fetch --all --quiet
+          git branch -a | grep -q 'sugerencia/' || \
+          gh pr list --state all --json headRefName --jq '.[].headRefName' | grep -q 'sugerencia/'
+
+      - name: "C12. PR de sugerencia/* mergeado"
+        id: c12
+        continue-on-error: true
+        run: |
+          gh pr list --state merged --base main --json headRefName \
+            --jq '.[].headRefName' | grep -q 'sugerencia/'
+
+      - name: "C13. PR de sugerencia/* tiene al menos un review"
+        id: c13
+        continue-on-error: true
+        run: |
+          PR=$(gh pr list --state merged --base main \
+            --json number,headRefName \
+            --jq '.[] | select(.headRefName | startswith("sugerencia/")) | .number' \
+            | head -1)
+          [ -n "$PR" ] && \
+          [ "$(gh pr view "$PR" --json reviews --jq '.reviews | length')" -gt 0 ]
+
+      - name: "C14. PR de sugerencia/* aprobado por otro usuario"
+        id: c14
+        continue-on-error: true
+        run: |
+          PR=$(gh pr list --state merged --base main \
+            --json number,headRefName \
+            --jq '.[] | select(.headRefName | startswith("sugerencia/")) | .number' \
+            | head -1)
+          [ -n "$PR" ] && \
+          [ "$(gh pr view "$PR" --json reviews \
+            --jq '[.reviews[] | select(.state == "APPROVED")] | length')" -gt 0 ]
+
+      # ── Puntaje final ──────────────────────────────────────────────
+
+      - name: Calcular puntaje
+        if: always()
+        env:
+          O_C1:  ${{ steps.c1.outcome }}
+          O_C2:  ${{ steps.c2.outcome }}
+          O_C3:  ${{ steps.c3.outcome }}
+          O_C4:  ${{ steps.c4.outcome }}
+          O_C5:  ${{ steps.c5.outcome }}
+          O_C6:  ${{ steps.c6.outcome }}
+          O_C7:  ${{ steps.c7.outcome }}
+          O_C8:  ${{ steps.c8.outcome }}
+          O_C9:  ${{ steps.c9.outcome }}
+          O_C10: ${{ steps.c10.outcome }}
+          O_C11: ${{ steps.c11.outcome }}
+          O_C12: ${{ steps.c12.outcome }}
+          O_C13: ${{ steps.c13.outcome }}
+          O_C14: ${{ steps.c14.outcome }}
+        run: |
+          pts() { [ "$1" = "success" ] && echo "$2" || echo 0; }
+          row() { [ "$2" = "success" ] && echo "| $1 | ✅ | $3 / $3 |" || echo "| $1 | ❌ | 0 / $3 |"; }
+
+          SCORE=0
+          SCORE=$((SCORE + $(pts "$O_C1"   5)))
+          SCORE=$((SCORE + $(pts "$O_C2"   5)))
+          SCORE=$((SCORE + $(pts "$O_C3"  10)))
+          SCORE=$((SCORE + $(pts "$O_C4"  10)))
+          SCORE=$((SCORE + $(pts "$O_C5"  10)))
+          SCORE=$((SCORE + $(pts "$O_C6"  10)))
+          SCORE=$((SCORE + $(pts "$O_C7"  10)))
+          SCORE=$((SCORE + $(pts "$O_C8"   5)))
+          SCORE=$((SCORE + $(pts "$O_C9"   5)))
+          SCORE=$((SCORE + $(pts "$O_C10"  5)))
+          SCORE=$((SCORE + $(pts "$O_C11"  5)))
+          SCORE=$((SCORE + $(pts "$O_C12"  5)))
+          SCORE=$((SCORE + $(pts "$O_C13"  5)))
+          SCORE=$((SCORE + $(pts "$O_C14" 10)))
+
+          {
+            echo "## Puntaje: $SCORE / 100"
+            echo ""
+            echo "| Test | Resultado | Puntos |"
+            echo "|------|:---------:|-------:|"
+            row "C1.  Proyecto compila"                             "$O_C1"   5
+            row "C2.  multiplicar implementada"                     "$O_C2"   5
+            row "C3.  multiplicar devuelve resultado correcto"      "$O_C3"  10
+            row "C4.  Commit wip: experimento roto existe"          "$O_C4"  10
+            row "C5.  Revert del experimento existe"                "$O_C5"  10
+            row "C6.  Sin conflict markers en operaciones.c"        "$O_C6"  10
+            row "C7.  esPar funciona correctamente"                 "$O_C7"  10
+            row "C8.  Ningun mensaje de commit vacio o muy corto"   "$O_C8"   5
+            row "C9.  Branch feature/mi-funcion fue creada"         "$O_C9"   5
+            row "C10. PR de feature/mi-funcion a main mergeado"     "$O_C10"  5
+            row "C11. Branch sugerencia/* fue creada"               "$O_C11"  5
+            row "C12. PR de sugerencia/* mergeado"                  "$O_C12"  5
+            row "C13. PR de sugerencia/* tiene al menos un review"  "$O_C13"  5
+            row "C14. PR de sugerencia/* aprobado por otro usuario" "$O_C14" 10
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Puntaje: $SCORE / 100"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          if [ "$SCORE" -eq 100 ]; then
+            echo ""
+            echo "🎉 ¡Felicitaciones! Obtuviste 100/100. Laboratorio completado."
+          elif [ "$SCORE" -ge 60 ]; then
+            echo ""
+            echo "✅ ¡Aprobado! Obtuviste $SCORE/100."
+            echo "   Revisá los tests con ❌ en el resumen si querés mejorar tu puntaje."
+          else
+            echo ""
+            echo "❌ Puntaje insuficiente: $SCORE/100 (mínimo 60)."
+            echo "   Revisá los tests que no pasaron en el resumen de arriba,"
+            echo "   corregí los errores y volvé a hacer push."
+            exit 1
+          fi
+
+      # ── Reporte a GitHub Classroom ─────────────────────────────────
+
+      - name: Resultado autograding
+        if: always()
+        uses: education/autograding@v1
+        continue-on-error: true
